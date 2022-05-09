@@ -6,7 +6,7 @@ export class ShoppingListDb extends Dexie {
 
     constructor() {
         super('shoppingList');
-        this.version(1).stores({
+        this.version(2).stores({
             things: '++id, isModified, isActive',
         });
     }

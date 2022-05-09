@@ -1,5 +1,6 @@
 export interface Thing {
     id?: number;
+    remoteId?: number;
     name: string;
     boughtAt?: string;
     isFromServer: 0 | 1;
