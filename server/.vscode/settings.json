@@ -5,5 +5,8 @@
         "source.organizeImports": true
     },
     "editor.defaultFormatter": "esbenp.prettier-vscode",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "appService.zipIgnorePattern": ["node_modules{,/**}", ".vscode{,/**}"],
+    "appService.defaultWebAppToDeploy": "/subscriptions/91fac388-d0f7-4219-9840-264373be1cd9/resourceGroups/shopping-list/providers/Microsoft.Web/sites/shopping-list-dev",
+    "appService.deploySubpath": "."
 }
