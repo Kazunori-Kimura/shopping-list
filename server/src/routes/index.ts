@@ -4,9 +4,21 @@ import { Router } from 'express';
 const prisma = new PrismaClient();
 const router = Router();
 
-// GET: /thing
+// GET: /thing?lastSync={string}
 router.get('/', async (req, res) => {
+    let where: Record<string, unknown> | undefined;
+
+    const { lastSync } = req.query;
+    if (lastSync) {
+        where = {
+            updatedAt: {
+                gt: lastSync,
+            },
+        };
+    }
+
     const things = await prisma.thing.findMany({
+        where,
         orderBy: {
             id: 'desc',
         },
@@ -15,15 +27,17 @@ router.get('/', async (req, res) => {
     res.status(200).json(things);
 });
 
+// GET: /thing/ids
+router.get('/ids', async (req, res) => {
+    const things = await prisma.thing.findMany({ select: { id: true } });
+    const data = things.map((thing) => thing.id);
+
+    res.status(200).json(data);
+});
+
 // GET: /thing/:id
 router.get('/:id', async (req, res) => {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-        res.status(400).json({ message: 'Bad Request' });
-        return;
-    }
-
-    const thing = await prisma.thing.findUnique({ where: { id } });
+    const thing = await prisma.thing.findUnique({ where: { id: req.params.id } });
     if (thing) {
         res.status(200).json(thing);
     } else {
@@ -32,10 +46,14 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST: /thing
-router.post('', async (req, res) => {
-    const { name, boughtAt, createdAt } = req.body;
+router.post('/', async (req, res) => {
+    const { id, name, boughtAt, createdAt } = req.body;
 
     let valid = true;
+    // id は必須
+    if (typeof id !== 'string' || id.length === 0) {
+        valid = false;
+    }
     // name は必須
     if (typeof name !== 'string' || name.length === 0) {
         valid = false;
@@ -56,8 +74,17 @@ router.post('', async (req, res) => {
         return;
     }
 
+    const thing = await prisma.thing.findUnique({
+        where: { id },
+    });
+    if (thing) {
+        res.status(409).json({ message: 'Conflict' });
+        return;
+    }
+
     const data = await prisma.thing.create({
         data: {
+            id,
             name,
             boughtAt,
             createdAt,
@@ -70,14 +97,8 @@ router.post('', async (req, res) => {
 
 // PUT: /thing/:id
 router.put('/:id', async (req, res) => {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-        res.status(400).json({ message: 'Bad Request' });
-        return;
-    }
-
     const thing = await prisma.thing.findUnique({
-        where: { id },
+        where: { id: req.params.id },
     });
     if (thing === null) {
         res.status(404).json({ message: 'Not Found' });
@@ -114,7 +135,7 @@ router.put('/:id', async (req, res) => {
 
     // 更新処理
     const data = await prisma.thing.update({
-        where: { id },
+        where: { id: req.params.id },
         data: {
             name,
             boughtAt,
@@ -127,14 +148,8 @@ router.put('/:id', async (req, res) => {
 
 // DELETE: /thing/:id
 router.delete('/:id', async (req, res) => {
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
-        res.status(400).json({ message: 'Bad Request' });
-        return;
-    }
-
     const thing = await prisma.thing.findUnique({
-        where: { id },
+        where: { id: req.params.id },
     });
     if (thing === null) {
         res.status(404).json({ message: 'Not Found' });
@@ -142,7 +157,7 @@ router.delete('/:id', async (req, res) => {
     }
 
     await prisma.thing.delete({
-        where: { id },
+        where: { id: req.params.id },
     });
 
     res.status(204).send();

@@ -11,7 +11,7 @@ datasource db {
 }
 
 model Thing {
-    id        Int @id @default(autoincrement())
+    id        String @id
     name      String
     boughtAt  String?
     createdAt String

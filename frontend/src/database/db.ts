@@ -5,9 +5,10 @@ export class ShoppingListDb extends Dexie {
     things!: Table<Thing>;
 
     constructor() {
-        super('shoppingList');
-        this.version(2).stores({
-            things: '++id, isModified, isActive',
+        super('shopping_list');
+
+        this.version(1).stores({
+            things: 'id, isModified, isActive, isFromServer',
         });
     }
 }

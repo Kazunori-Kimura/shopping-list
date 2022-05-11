@@ -1,5 +1,5 @@
 export interface Thing {
-    id: number;
+    id: string;
     name: string;
     boughtAt?: string;
     createdAt: string;

@@ -1,6 +1,5 @@
 export interface Thing {
-    id?: number;
-    remoteId?: number;
+    id?: string;
     name: string;
     boughtAt?: string;
     isFromServer: 0 | 1;
@@ -9,3 +8,18 @@ export interface Thing {
     createdAt: string;
     updatedAt: string;
 }
+
+export type ThingResponse = Pick<Thing, 'id' | 'name' | 'boughtAt' | 'createdAt' | 'updatedAt'>;
+
+export const isThingResponse = (item: unknown): item is ThingResponse => {
+    if (item && typeof item === 'object') {
+        const values = item as Record<string, unknown>;
+        return (
+            typeof values.id === 'string' &&
+            typeof values.name === 'string' &&
+            typeof values.createdAt === 'string' &&
+            typeof values.updatedAt === 'string'
+        );
+    }
+    return false;
+};

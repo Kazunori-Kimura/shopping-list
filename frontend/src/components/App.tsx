@@ -1,10 +1,17 @@
 import { Container, createTheme, CssBaseline, Stack, ThemeProvider } from '@mui/material';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
+import { v4 as uuid } from 'uuid';
 import db from '../database/db';
 import { Thing } from '../models/thing';
+import { LastSyncMessage } from '../workers/sync.worker';
 import ShoppingList from './ShoppingList';
 import ThingForm from './ThingForm';
+
+/**
+ * 最終同期日時
+ */
+const LastSyncKey = 'last-sync-datetime';
 
 const theme = createTheme();
 
@@ -19,6 +26,7 @@ const App: React.FC = () => {
             if (name) {
                 const now = new Date().toISOString();
                 await db.things.add({
+                    id: uuid(),
                     name,
                     isFromServer: 0,
                     isModified: 1,
@@ -78,6 +86,32 @@ const App: React.FC = () => {
         } catch (err) {
             console.error(err);
         }
+    }, []);
+
+    // WebWorker を実行する
+    useEffect(() => {
+        const worker = new Worker('./worker/sync.worker.js');
+
+        worker.onmessage = (event: MessageEvent<LastSyncMessage>) => {
+            console.log('worker.onmessage: ', event.data);
+            localStorage.setItem(LastSyncKey, event.data.lastSync);
+        };
+        worker.onerror = (event: ErrorEvent) => {
+            console.error(event);
+        };
+
+        // 前回同期日時の取得
+        const lastSync = localStorage.getItem(LastSyncKey);
+
+        worker.postMessage({
+            type: 'start',
+            endpointUrl: process.env.REACT_APP_API_ENDPOINT,
+            lastSync,
+        });
+
+        return () => {
+            worker.terminate();
+        };
     }, []);
 
     return (
