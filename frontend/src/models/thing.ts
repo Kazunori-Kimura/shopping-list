@@ -1,7 +1,7 @@
 export interface Thing {
     id?: string;
     name: string;
-    boughtAt?: string;
+    boughtAt?: string | null;
     isFromServer: 0 | 1;
     isModified: 0 | 1;
     isActive: 0 | 1;
