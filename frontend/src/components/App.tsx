@@ -63,7 +63,7 @@ const App: React.FC = () => {
         try {
             const now = new Date().toISOString();
             await db.things.update(thing, {
-                boughtAt: undefined,
+                boughtAt: null,
                 isModified: 1,
                 updatedAt: now,
             });

@@ -46,7 +46,9 @@ const isSyncMessage = (item: unknown): item is SyncMessage => {
 export interface LastSyncMessage {
     lastSync: string;
 }
-
+/**
+ * 最終同期日時
+ */
 let lastSync: string | undefined;
 
 // 同期間隔
@@ -62,64 +64,75 @@ let endpointUrl = 'http://localhost:8080';
  * 同期処理: Remote -> Local
  */
 async function syncRemote() {
-    let url = `${endpointUrl}/thing`;
+    console.log('-- start syncRemote');
+    let updateCount = 0;
+    let insertCount = 0;
 
-    if (lastSync) {
-        // 前回同期時刻を QueryString で渡す
-        const params = { lastSync };
-        const query = new URLSearchParams(params);
-        url = `${url}?${query}`;
-    }
+    try {
+        let url = `${endpointUrl}/thing`;
 
-    const now = new Date().toISOString();
-    const res = await fetch(url, { mode: 'cors', cache: 'no-cache' });
-    const { ok, status } = res;
-    console.log(ok, status);
-    if (ok) {
-        const data = await res.json();
-        console.log(data);
-        if (Array.isArray(data) && data.every(isThingResponse)) {
-            await db.transaction('rw', db.things, async () => {
-                const upsertPromises = data.map(async (resThing) => {
-                    const { id } = resThing;
+        if (lastSync) {
+            // 前回同期時刻 - 1h を QueryString で渡す
+            // (-1h は他端末との同期タイミングのズレなどを考慮したバッファ)
+            const date = new Date(lastSync);
+            date.setHours(date.getHours() - 1);
+            const params = { lastSync: date.toISOString() };
+            const query = new URLSearchParams(params);
+            url = `${url}?${query}`;
+        }
 
-                    if (resThing.boughtAt === null) {
-                        delete resThing.boughtAt;
-                    }
+        const now = new Date().toISOString();
+        const res = await fetch(url, { mode: 'cors', cache: 'no-cache' });
+        const { ok } = res;
 
-                    const thing = await db.things.where({ id }).first();
-                    if (thing) {
-                        // IndexedDB の内容が更新されており
-                        // API から取得したデータより新しければ何もしない
-                        if (thing.isModified === 1 && thing.updatedAt > resThing.updatedAt) {
-                            return;
+        if (ok) {
+            const data = await res.json();
+
+            if (Array.isArray(data) && data.every(isThingResponse)) {
+                await db.transaction('rw', db.things, async () => {
+                    const upsertPromises = data.map(async (resThing) => {
+                        const { id } = resThing;
+
+                        const thing = await db.things.where({ id }).first();
+                        if (thing) {
+                            // IndexedDB の内容が更新されており
+                            // API から取得したデータより新しければ何もしない
+                            if (thing.isModified === 1 && thing.updatedAt > resThing.updatedAt) {
+                                return;
+                            }
+
+                            // update
+                            await db.things.update(thing, {
+                                ...resThing,
+                                isFromServer: 1,
+                                isModified: 0,
+                                isActive: 1,
+                            });
+                            updateCount++;
+                        } else {
+                            // insert
+                            await db.things.add({
+                                ...resThing,
+                                isFromServer: 1,
+                                isModified: 0,
+                                isActive: 1,
+                            });
+                            insertCount++;
                         }
+                    });
 
-                        // update
-                        await db.things.update(thing, {
-                            ...resThing,
-                            isFromServer: 1,
-                            isModified: 0,
-                            isActive: 1,
-                        });
-                    } else {
-                        // insert
-                        await db.things.add({
-                            ...resThing,
-                            isFromServer: 1,
-                            isModified: 0,
-                            isActive: 1,
-                        });
-                    }
+                    await Promise.all(upsertPromises);
                 });
 
-                await Promise.all(upsertPromises);
-            });
-
-            // 同期時刻の更新
-            lastSync = now;
-            self.postMessage({ lastSync });
+                // 同期時刻の更新
+                lastSync = now;
+                self.postMessage({ lastSync });
+            }
         }
+    } catch (err) {
+        console.error(err);
+    } finally {
+        console.log(`-- end syncRemote (insert: ${insertCount}, update: ${updateCount})`);
     }
 }
 
@@ -127,27 +140,37 @@ async function syncRemote() {
  * サーバー側に存在しない項目を IndexedDB から削除する
  */
 async function syncDelete() {
-    // サーバー側の ID のリストを取得
-    const res = await fetch(`${endpointUrl}/thing/ids`, { mode: 'cors', cache: 'no-cache' });
-    const { ok } = res;
-    if (ok) {
-        const data = await res.json();
-        console.log(data);
-        if (Array.isArray(data) && data.every((item) => typeof item === 'string')) {
-            const ids = data as string[];
-            await db.transaction('rw', db.things, async () => {
-                // IndexedDB に保持している項目を取得
-                const things = await db.things.where({ isFromServer: 1 }).toArray();
-                const promises = things.map(async (thing) => {
-                    // サーバー側のリストになければ削除
-                    if (thing.id && !ids.includes(thing.id)) {
-                        await db.things.where({ id: thing.id }).delete();
-                    }
-                });
+    console.log('-- start syncDelete');
+    let deleteCount = 0;
 
-                await Promise.all(promises);
-            });
+    try {
+        // サーバー側の ID のリストを取得
+        const res = await fetch(`${endpointUrl}/thing/ids`, { mode: 'cors', cache: 'no-cache' });
+        const { ok } = res;
+        if (ok) {
+            const data = await res.json();
+
+            if (Array.isArray(data) && data.every((item) => typeof item === 'string')) {
+                const ids = data as string[];
+                await db.transaction('rw', db.things, async () => {
+                    // IndexedDB に保持している項目を取得
+                    const things = await db.things.where({ isFromServer: 1 }).toArray();
+                    const promises = things.map(async (thing) => {
+                        // サーバー側のリストになければ削除
+                        if (thing.id && !ids.includes(thing.id)) {
+                            await db.things.where({ id: thing.id }).delete();
+                            deleteCount++;
+                        }
+                    });
+
+                    await Promise.all(promises);
+                });
+            }
         }
+    } catch (err) {
+        console.error(err);
+    } finally {
+        console.log(`-- end syncDelete (delete: ${deleteCount})`);
     }
 }
 
@@ -228,70 +251,83 @@ async function fetchDelete(thing: Thing): Promise<boolean> {
  * 同期処理: Local -> Remote
  */
 async function syncLocal() {
-    // ローカルで変更されたデータ
-    const things = await db.things.where({ isModified: 1 }).toArray();
-    things.forEach(async (thing) => {
-        if (thing.isFromServer === 0 && thing.isActive === 1) {
-            // POST
-            const res = await fetchPost(thing);
-            if (res) {
-                // 登録成功
-                await db.things.update(thing, {
-                    isFromServer: 1,
-                    isModified: 0,
-                    isActive: 1,
-                });
-            }
-            return;
-        }
+    console.log('-- start syncLocal');
+    let postCount = 0;
+    let putCount = 0;
+    let deleteCount = 0;
 
-        if (thing.isFromServer === 1 && thing.isActive === 1) {
-            // PUT
-            const res = await fetchPut(thing);
-            if (res) {
-                // 更新成功
-                await db.things.update(thing, {
-                    isFromServer: 1,
-                    isModified: 0,
-                    isActive: 1,
-                });
-            }
-            return;
-        }
+    try {
+        // ローカルで変更されたデータ
+        const things = await db.things.where({ isModified: 1 }).toArray();
+        for (let i = 0; i < things.length; i++) {
+            const thing = things[i];
 
-        if (thing.isFromServer === 1 && thing.isActive === 0) {
-            // DELETE
-            const res = await fetchDelete(thing);
-            if (res) {
-                // 削除成功
+            if (thing.isFromServer === 0 && thing.isActive === 1) {
+                // POST
+                const res = await fetchPost(thing);
+                if (res) {
+                    // 登録成功
+                    await db.things.update(thing, {
+                        isFromServer: 1,
+                        isModified: 0,
+                        isActive: 1,
+                    });
+                    postCount++;
+                }
+            } else if (thing.isFromServer === 1 && thing.isActive === 1) {
+                // PUT
+                const res = await fetchPut(thing);
+                if (res) {
+                    // 更新成功
+                    await db.things.update(thing, {
+                        isFromServer: 1,
+                        isModified: 0,
+                        isActive: 1,
+                    });
+                    putCount++;
+                }
+            } else if (thing.isFromServer === 1 && thing.isActive === 0) {
+                // DELETE
+                const res = await fetchDelete(thing);
+                if (res) {
+                    // 削除成功
+                    await db.things.where({ id: thing.id }).delete();
+                    deleteCount++;
+                }
+            } else if (thing.isFromServer === 0 && thing.isActive === 0) {
+                // 同期前にローカルから削除された
+                // -> IndexedDB から削除
                 await db.things.where({ id: thing.id }).delete();
             }
-            return;
         }
-
-        if (thing.isFromServer === 0 && thing.isActive === 0) {
-            // 同期前にローカルから削除された
-            // -> IndexedDB から削除
-            await db.things.where({ id: thing.id }).delete();
-        }
-    });
+    } catch (err) {
+        console.error(err);
+    } finally {
+        console.log(
+            `-- end syncLocal (POST: ${postCount}, PUT: ${putCount}, DELETE: ${deleteCount})`
+        );
+    }
 }
 
 async function syncMain(url?: string, isOnce = false) {
+    console.time('syncMain');
     if (url) {
         endpointUrl = url;
     }
 
-    // Local -> Remote
-    await syncLocal();
-    // Remote -> Local
-    await syncRemote();
-    // Local の不要データ削除
-    await syncDelete();
+    if (self.navigator.onLine) {
+        // Local -> Remote
+        await syncLocal();
+        // Remote -> Local
+        await syncRemote();
+        // Local の不要データ削除
+        await syncDelete();
+    }
 
     if (!isOnce) {
         syncTimer = setTimeout(() => syncMain(), SyncInterval);
     }
+    console.timeEnd('syncMain');
 }
 
 self.onmessage = (event: MessageEvent<SyncMessage>) => {
